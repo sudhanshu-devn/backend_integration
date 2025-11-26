@@ -1,0 +1,1 @@
+user_sessions = {}  # user_id: {access_token, pages, ad_accounts}

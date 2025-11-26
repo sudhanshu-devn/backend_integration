@@ -1,12 +1,10 @@
-from pydantic import BaseModel, EmailStr, constr
+from pydantic import BaseModel, EmailStr
 
-# create a type alias so the call expression is not used directly in the annotation
-PasswordStr = constr(max_length=72)
+class OAuthURLResponse(BaseModel):
+    oauth_url: str
 
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: PasswordStr
-
-class Token(BaseModel):
+class FacebookUser(BaseModel):
+    user_id: str
+    name: str | None = None
+    email: EmailStr | None = None
     access_token: str
-    token_type: str = "bearer"

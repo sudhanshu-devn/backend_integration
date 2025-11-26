@@ -1,7 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
-pydantic
+pydantic[email]
 passlib[bcrypt]
 python-jose
 httpx
+python-dotenv
