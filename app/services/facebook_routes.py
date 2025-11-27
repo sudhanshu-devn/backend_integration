@@ -1,17 +1,25 @@
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
+import httpx
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import tempfile
+import shutil
+import os
+
+from facebook_business.api import FacebookAdsApi
+from facebook_business.adobjects.adimage import AdImage
+from facebook_business.adobjects.advideo import AdVideo
 
 
 from app.services.facebook.client import fb_get
 from app.services.facebook.campaigns import create_campaign
 from app.services.facebook.adsets import create_adset
-from app.services.facebook.ads import create_ad
+from app.services.facebook.ads import create_video_ad
 from app.services.facebook.media import upload_media_service
 
 router = APIRouter(prefix="/facebook", tags=["Facebook Ads"])
 
+FB_API_URL = "https://graph.facebook.com/v22.0"
 
 ### Request Models -----------------------------
 class CampaignInput(BaseModel):
@@ -122,6 +130,28 @@ async def api_create_adset(data: AdSetInput):
         targeting=targeting  # Pass targeting to service
     )
 
+@router.get("/adsets/list")
+async def list_adsets(account_id: str = Query(...), access_token: str = Query(...)):
+    """
+    List all Ad Sets for a given ad account.
+    account_id should NOT include 'act_' prefix; only the numeric ID.
+    """
+    url = f"{FB_API_URL}/act_{account_id}/adsets"
+
+    params = {
+        "fields": "id,name,campaign_id,status",
+        "access_token": access_token
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        data = response.json()
+
+    if "error" in data:
+        raise HTTPException(status_code=400, detail=data["error"]["message"])
+
+    return data
+
 @router.post("/media/upload")
 async def upload_media(
     account_id: str = Form(...),
@@ -146,6 +176,156 @@ async def upload_media(
 
     return result
 
-@router.post("/ads/create")
-async def api_create_ad(data: AdInput):
-    return await create_ad(**data.dict())
+
+@router.post("/adcreatives/create/video")
+async def create_video_ad_creative_simple(
+    account_id: str = Form(...),
+    page_id: str = Form(...),
+    ad_name: str = Form(...),
+    message: str = Form(...),
+    link: str = Form(...),
+    access_token: str = Form(...),
+    video_id: str = Form(...),
+    thumbnail_hash: str = Form(...),
+):
+    try:
+        creative_payload = {
+            "name": ad_name,
+            "object_story_spec": {
+                "page_id": page_id,
+                "video_data": {
+                    "video_id": video_id,
+                    "title": ad_name,
+                    "message": message,
+                    "image_hash": thumbnail_hash,
+                    "call_to_action": {"type": "LEARN_MORE", "value": {"link": link}},
+                },
+            },
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{FB_API_URL}/act_{account_id}/adcreatives",
+                params={"access_token": access_token},
+                json=creative_payload,
+            )
+            data = response.json()
+            if "error" in data:
+                raise HTTPException(status_code=400, detail=data["error"]["message"])
+
+        return {"creative_id": data.get("id"), "creative_data": data}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ads/create/videoAds")
+async def api_create_video_ad(
+    account_id: str = Form(...),
+    adset_id: str = Form(...),
+    page_id: str = Form(...),
+    ad_name: str = Form(...),
+    video_id: str = Form(...),
+    thumbnail_hash: str = Form(...),
+    message: str = Form(...),
+    link: str = Form(...),
+    access_token: str = Form(...)
+):
+    result = await create_video_ad(
+        account_id=account_id,
+        adset_id=adset_id,
+        page_id=page_id,
+        ad_name=ad_name,
+        video_id=video_id,
+        thumbnail_hash=thumbnail_hash,
+        message=message,
+        link=link,
+        access_token=access_token
+    )
+    return result
+
+
+# --- Helper functions ---
+
+async def upload_image(account_id: str, access_token: str, file_path: str):
+    FacebookAdsApi.init(access_token=access_token)
+    image = AdImage(parent_id=account_id)
+    image[AdImage.Field.filename] = file_path
+    image.remote_create()
+    return image[AdImage.Field.hash]
+
+async def upload_video(account_id: str, access_token: str, file_path: str):
+    FacebookAdsApi.init(access_token=access_token)
+    video = AdVideo(parent_id=account_id)
+    video[AdVideo.Field.filepath] = file_path
+    video.remote_create()
+    return video[AdVideo.Field.id]
+
+@router.post("/ads/create/video/v1")
+async def create_video_ad_endpoint(
+    account_id: str = Form(...),
+    adset_id: str = Form(...),
+    page_id: str = Form(...),
+    ad_name: str = Form(...),
+    message: str = Form(...),
+    link: str = Form(...),
+    access_token: str = Form(...),
+    video_file: UploadFile = File(...),
+    thumbnail_file: UploadFile = File(...),
+):
+    try:
+        # Ensure account_id is numeric for media upload
+        numeric_account_id = account_id.replace("act_", "")
+
+        # Save uploaded files temporarily
+        temp_video_path = f"/tmp/{video_file.filename}"
+        temp_thumb_path = f"/tmp/{thumbnail_file.filename}"
+
+        with open(temp_video_path, "wb") as f:
+            shutil.copyfileobj(video_file.file, f)
+
+        with open(temp_thumb_path, "wb") as f:
+            shutil.copyfileobj(thumbnail_file.file, f)
+
+        # Upload media to Facebook
+        video_id = await upload_video(numeric_account_id, access_token, temp_video_path)
+        thumbnail_hash = await upload_image(numeric_account_id, access_token, temp_thumb_path)
+
+        # Clean up temp files
+        os.remove(temp_video_path)
+        os.remove(temp_thumb_path)
+
+        # Create the video ad
+        url = f"{FB_API_URL}/act_{numeric_account_id}/ads"
+        payload = {
+            "name": ad_name,
+            "adset_id": adset_id,
+            "creative": {
+                "object_story_spec": {
+                    "page_id": page_id,
+                    "video_data": {
+                        "video_id": video_id,
+                        "title": ad_name,
+                        "message": message,
+                        "image_hash": thumbnail_hash,
+                        "call_to_action": {
+                            "type": "LEARN_MORE",
+                            "value": {"link": link},
+                        },
+                    },
+                }
+            },
+            "status": "PAUSED",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, params={"access_token": access_token}, json=payload)
+            data = response.json()
+
+        if "error" in data:
+            raise HTTPException(status_code=400, detail=data["error"]["message"])
+
+        return data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
