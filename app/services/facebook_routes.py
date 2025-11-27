@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
+from typing import Optional, Dict, Any
 
 from app.services.facebook.client import fb_get
 from app.services.facebook.campaigns import create_campaign
@@ -24,6 +25,7 @@ class AdSetInput(BaseModel):
     start_time: str
     end_time: str
     access_token: str
+    targeting: Optional[Dict[str, Any]] = None  
 
 class AdInput(BaseModel):
     account_id: str
@@ -90,7 +92,25 @@ async def api_get_campaign(campaign_id: str, access_token: str):
 
 @router.post("/adsets/create")
 async def api_create_adset(data: AdSetInput):
-    return await create_adset(**data.dict())
+    # If no targeting provided, use a default broad audience
+    targeting = data.targeting or {
+        "geo_locations": {"countries": ["US"]},  # Minimum required
+        "age_min": 18,
+        "age_max": 65,
+        "genders": [1, 2]
+    }
+
+    return await create_adset(
+        account_id=data.account_id,
+        campaign_id=data.campaign_id,
+        name=data.name,
+        daily_budget=data.daily_budget,
+        start_time=data.start_time,
+        end_time=data.end_time,
+        access_token=data.access_token,
+        targeting=targeting  # Pass targeting to service
+    )
+
 
 
 @router.post("/ads/create")
