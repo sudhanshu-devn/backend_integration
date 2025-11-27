@@ -1,11 +1,14 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+import tempfile
+
 
 from app.services.facebook.client import fb_get
 from app.services.facebook.campaigns import create_campaign
 from app.services.facebook.adsets import create_adset
 from app.services.facebook.ads import create_ad
+from app.services.facebook.media import upload_media_service
 
 router = APIRouter(prefix="/facebook", tags=["Facebook Ads"])
 
@@ -37,16 +40,24 @@ class AdInput(BaseModel):
     link: str
     access_token: str
 
+class MediaUploadInput(BaseModel):
+    account_id: str
+    page_id: str  # required for videos
+    access_token: str
+    media_type: str  # "video" or "image"
+    file_path: str   # local path or S3 path
+
 
 ### ROUTES -------------------------------------
+@router.get("/pages")
+async def get_pages(access_token: str):
+    return await fb_get("me/accounts", {"access_token": access_token})
+
 
 @router.get("/ad_accounts")
 async def get_ad_accounts(access_token: str):
     return await fb_get("me/adaccounts", {"access_token": access_token})
 
-
-
-@router.post("/campaigns/create")
 
 @router.post("/campaigns/create")
 async def api_create_campaign(
@@ -111,7 +122,29 @@ async def api_create_adset(data: AdSetInput):
         targeting=targeting  # Pass targeting to service
     )
 
+@router.post("/media/upload")
+async def upload_media(
+    account_id: str = Form(...),
+    page_id: str = Form(...),  # kept for consistency (FB videos use page later)
+    access_token: str = Form(...),
+    media_type: str = Form(...),  # "image" or "video"
+    file: UploadFile = File(...),
+):
+    # Save uploaded file temporarily
+    ext = file.filename.split(".")[-1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as temp:
+        temp.write(await file.read())
+        temp_path = temp.name
 
+    # Call service
+    result = upload_media_service(
+        account_id=f"act_{account_id}",
+        media_type=media_type,
+        access_token=access_token,
+        temp_path=temp_path,
+    )
+
+    return result
 
 @router.post("/ads/create")
 async def api_create_ad(data: AdInput):

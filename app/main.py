@@ -7,7 +7,7 @@ from app.services.facebook_routes import router as facebook_router
 app = FastAPI()
 
 app.include_router(oauth_router)
-app.include_router(media_router)
+# app.include_router(media_router)
 app.include_router(ad_accounts_router)
 
 app.include_router(facebook_router)
