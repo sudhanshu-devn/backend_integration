@@ -152,6 +152,43 @@ async def list_adsets(account_id: str = Query(...), access_token: str = Query(..
 
     return data
 
+@router.get("/adsets/verify/{adset_id}")
+async def verify_adset_ownership(
+    adset_id: str,
+    your_account_id: str = Query(...),
+    access_token: str = Query(...)
+):
+    """
+    Verify if an adset belongs to a specific ad account.
+    """
+
+    url = f"{FB_API_URL}/{adset_id}"
+    params = {
+        "fields": "id,account_id,name,status,campaign_id",
+        "access_token": access_token,
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        data = response.json()
+
+    # Handle API errors
+    if "error" in data:
+        raise HTTPException(
+            status_code=400,
+            detail=data["error"]["message"],
+        )
+
+    adset_account = data.get("account_id")
+
+    return {
+        "adset_id": adset_id,
+        "adset_account_id": adset_account,
+        "your_account_id": your_account_id,
+        "belongs_to_you": (adset_account == f"act_{your_account_id}"),
+        "adset_details": data,
+    }
+
 @router.post("/media/upload")
 async def upload_media(
     account_id: str = Form(...),
@@ -324,6 +361,54 @@ async def create_video_ad_endpoint(
 
         if "error" in data:
             raise HTTPException(status_code=400, detail=data["error"]["message"])
+
+        return data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@router.post("/ads/publish")
+async def publish_ad(
+    account_id: str = Form(...),
+    adset_id: str = Form(...),
+    ad_name: str = Form(...),
+    creative_id: str = Form(...),
+    access_token: str = Form(...),
+    tracking_specs: str = Form("[]"),   # JSON string like JS version
+    status: str = Form("PAUSED"),
+):
+    try:
+        # Convert tracking_specs JSON string → Python list
+        import json
+        try:
+            tracking_specs_parsed = json.loads(tracking_specs)
+        except:
+            tracking_specs_parsed = []
+
+        publish_payload = {
+            "name": ad_name,
+            "adset_id": adset_id,
+            "creative": {"creative_id": creative_id},
+            "tracking_specs": tracking_specs_parsed,
+            "status": status,
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{FB_API_URL}/act_{account_id}/ads",
+                params={
+                    "access_token": access_token,
+                    "fields": "status,effective_status,issues_info",
+                },
+                json=publish_payload,
+            )
+
+        data = response.json()
+        print("FB DEBUG RESPONSE:", data)  # helpful logger
+
+        if "error" in data:
+            raise HTTPException(status_code=400, detail=data)
 
         return data
 
