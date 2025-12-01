@@ -42,9 +42,16 @@ async def create_campaign(account_id: str, name: str, objective: str, access_tok
 
     # Handle Facebook API errors
     if "error" in data:
+        # **Use the full message from Facebook for better debugging**
+        facebook_error_message = data['error'].get('message', 'Unknown Facebook Error')
+        
+        # Include the error code and type for completeness
+        error_code = data['error'].get('code', 'N/A')
+        error_type = data['error'].get('type', 'N/A')
+        
         raise HTTPException(
             status_code=400,
-            detail=f"Facebook API error: {data['error'].get('message')}"
+            detail=f"Facebook API Error ({error_type} {error_code}): {facebook_error_message}"
         )
-
+    
     return data
